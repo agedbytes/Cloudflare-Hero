@@ -49,6 +49,13 @@ st.markdown("""
         border-radius: 0.5rem;
         margin-bottom: 1rem;
     }
+    .warning-message {
+        padding: 1rem;
+        background-color: #fff3cd;
+        color: #856404;
+        border-radius: 0.5rem;
+        margin-bottom: 1rem;
+    }
     .log-container {
         height: 300px;
         overflow-y: auto;
@@ -82,6 +89,9 @@ if 'logs' not in st.session_state:
 if 'update_status' not in st.session_state:
     st.session_state.update_status = None
 
+if 'external_ip' not in st.session_state:
+    st.session_state.external_ip = None
+
 # Function to add log entries
 def add_log(message, is_error=False):
     timestamp = datetime.datetime.now().strftime("%H:%M:%S")
@@ -91,21 +101,31 @@ def add_log(message, is_error=False):
         "is_error": is_error
     })
 
-# Function to get external IP
+# Try multiple IP detection services to increase reliability
 def get_external_ip():
-    try:
-        add_log("Fetching external IP...")
-        response = requests.get("https://checkip.amazonaws.com", timeout=10)
-        if response.status_code == 200:
-            ip = response.text.strip()
-            add_log(f"External IP: {ip}")
-            return ip
-        else:
-            add_log(f"Error fetching external IP: HTTP {response.status_code}", True)
-            return None
-    except Exception as e:
-        add_log(f"Error fetching external IP: {str(e)}", True)
-        return None
+    services = [
+        "https://checkip.amazonaws.com",
+        "https://api.ipify.org",
+        "https://icanhazip.com",
+        "https://ifconfig.me/ip"
+    ]
+    
+    add_log("Fetching external IP...")
+    
+    for service in services:
+        try:
+            response = requests.get(service, timeout=5)
+            if response.status_code == 200:
+                ip = response.text.strip()
+                if is_valid_ip(ip):
+                    add_log(f"External IP detected: {ip}")
+                    st.session_state.external_ip = ip
+                    return ip
+        except Exception:
+            continue
+    
+    add_log("Failed to detect external IP from all services", True)
+    return None
 
 # Function to validate IP address
 def is_valid_ip(ip):
@@ -236,6 +256,7 @@ def update_dns():
     # Get form values
     ip_source = st.session_state.ip_source
     custom_ip = st.session_state.custom_ip if ip_source == "custom" else ""
+    manual_ip = st.session_state.manual_ip if ip_source == "manual" else ""
     dns_record = st.session_state.dns_record
     zone_id = st.session_state.zone_id
     api_token = st.session_state.api_token
@@ -265,22 +286,29 @@ def update_dns():
         st.session_state.update_status = "error"
         return
     
-    # Check custom IP and proxied settings
-    if ip_source == "custom" and proxied:
-        add_log("Error! Custom IP cannot be Proxied", True)
-        st.session_state.update_status = "error"
-        return
-    
     # Get current IP based on selection
     if ip_source == "external":
         current_ip = get_external_ip()
-    else:  # custom
+    elif ip_source == "custom":
         if not is_valid_ip(custom_ip):
-            add_log("Error! Invalid IP address format", True)
+            add_log("Error! Invalid custom IP address format", True)
             st.session_state.update_status = "error"
             return
         current_ip = custom_ip
         add_log(f"Using custom IP: {current_ip}")
+    else:  # manual
+        if not is_valid_ip(manual_ip):
+            add_log("Error! Invalid manually entered IP address format", True)
+            st.session_state.update_status = "error"
+            return
+        current_ip = manual_ip
+        add_log(f"Using manually entered IP: {current_ip}")
+    
+    # Check custom/manual IP and proxied settings
+    if (ip_source in ["custom", "manual"]) and proxied:
+        add_log(f"Error! {ip_source.capitalize()} IP cannot be Proxied", True)
+        st.session_state.update_status = "error"
+        return
     
     if not current_ip:
         st.session_state.update_status = "error"
@@ -338,6 +366,7 @@ def update_dns():
 def load_sample_data():
     st.session_state.ip_source = "external"
     st.session_state.custom_ip = "192.168.1.100"
+    st.session_state.manual_ip = ""
     st.session_state.dns_record = "home.example.com"
     st.session_state.zone_id = "346d3eba30e4a4d282f23fef3b4add60"
     st.session_state.api_token = "5bcFxQiRsNq5L48bnMcxtn5pIxW-ILueXt_p0Eq0"
@@ -349,6 +378,13 @@ def load_sample_data():
     st.session_state.notify_discord = True
     st.session_state.discord_webhook_url = "https://discord.com/api/webhooks/123456789/example"
 
+# Try to detect external IP at app startup
+if st.session_state.external_ip is None:
+    try:
+        st.session_state.external_ip = get_external_ip()
+    except:
+        pass
+
 # Main app layout
 st.markdown("<h1 class='main-header'>Cloudflare DNS Updater</h1>", unsafe_allow_html=True)
 
@@ -359,14 +395,58 @@ with col1:
     # DNS Configuration Form
     st.markdown("<h2 class='section-header'>DNS Configuration</h2>", unsafe_allow_html=True)
     
+    # Display an informational message about external IPs in cloud deployment
+    st.markdown(
+        "<div class='warning-message'>"
+        "⚠️ <strong>Cloud Deployment Notice:</strong> When using the 'External IP' option, "
+        "this app will detect the IP of the Streamlit server, not your personal device. "
+        "For correct operation, use the 'Manual IP' option to enter your actual public IP address."
+        "</div>",
+        unsafe_allow_html=True
+    )
+    
     # IP Source Selection
     st.radio(
         "IP Source", 
-        options=["external", "custom"],
+        options=["external", "manual", "custom"],
         index=0, 
         key="ip_source",
-        format_func=lambda x: "External IP (Auto-detected)" if x == "external" else "Custom IP"
+        format_func=lambda x: {
+            "external": "External IP (Cloud server IP)",
+            "manual": "Manual IP Entry (Your actual public IP)",
+            "custom": "Custom IP (e.g., internal network IP)"
+        }[x]
     )
+    
+    # Display the detected external IP if available and show IP source help
+    if st.session_state.ip_source == "external":
+        if st.session_state.external_ip:
+            st.info(f"Detected server IP: {st.session_state.external_ip} (this is NOT your personal device's IP)")
+        else:
+            st.warning("Could not detect server IP. Consider using 'Manual IP Entry' instead.")
+    
+    # Manual IP input (shown only when manual IP is selected)
+    if st.session_state.ip_source == "manual":
+        # First try to get the user's public IP to help them
+        try:
+            user_ip = requests.get("https://checkip.amazonaws.com", timeout=5).text.strip()
+            st.text_input(
+                "Your Public IP Address", 
+                value=user_ip,
+                help="You can verify this is your public IP by searching 'what is my ip' in Google",
+                key="manual_ip"
+            )
+        except:
+            st.text_input(
+                "Your Public IP Address", 
+                placeholder="Enter your public IP here",
+                help="You can find your public IP by searching 'what is my ip' in Google",
+                key="manual_ip"
+            )
+    else:
+        # Ensure the manual_ip exists in session state
+        if "manual_ip" not in st.session_state:
+            st.session_state.manual_ip = ""
     
     # Custom IP input (shown only when custom IP is selected)
     if st.session_state.ip_source == "custom":
@@ -423,12 +503,23 @@ with col1:
         )
     
     with ttl_proxy_col2:
-        st.checkbox(
-            "Use Cloudflare Proxy", 
-            value=True,
-            help="Enable Cloudflare's proxy features (not available with custom IPs)",
-            key="proxied"
-        )
+        proxy_disabled = st.session_state.ip_source in ["custom", "manual"]
+        if proxy_disabled:
+            st.checkbox(
+                "Use Cloudflare Proxy", 
+                value=False,
+                disabled=True,
+                help="Proxying is not available with custom or manual IPs",
+                key="proxied"
+            )
+            st.markdown("<p class='small-info'>(Proxying not available with custom/manual IPs)</p>", unsafe_allow_html=True)
+        else:
+            st.checkbox(
+                "Use Cloudflare Proxy", 
+                value=True,
+                help="Enable Cloudflare's proxy features",
+                key="proxied"
+            )
     
     # Notification Settings
     st.markdown("<h2 class='section-header'>Notification Settings</h2>", unsafe_allow_html=True)
@@ -522,15 +613,14 @@ with col2:
     with settings_container:
         st.markdown(f"**DNS Record:** {st.session_state.dns_record or 'Not set'}")
         
-        # Get current external IP for display (if using external IP)
+        # Display the current IP based on the selected source
         current_ip_display = "Unknown"
         if st.session_state.ip_source == "external":
-            try:
-                current_ip_display = requests.get("https://checkip.amazonaws.com", timeout=5).text.strip()
-            except:
-                current_ip_display = "Could not detect"
-        else:
+            current_ip_display = st.session_state.external_ip or "Could not detect"
+        elif st.session_state.ip_source == "custom":
             current_ip_display = st.session_state.custom_ip or "Not set"
+        else:  # manual
+            current_ip_display = st.session_state.manual_ip or "Not set"
         
         st.markdown(f"**Current IP:** {current_ip_display}")
         
@@ -571,6 +661,28 @@ with col2:
                 )
         
         st.markdown("</div>", unsafe_allow_html=True)
+
+# Add a tool to check your public IP
+st.sidebar.title("IP Tools")
+st.sidebar.markdown("### Find Your Public IP")
+
+if st.sidebar.button("Check My Public IP"):
+    try:
+        ip = requests.get("https://api.ipify.org").text
+        st.sidebar.success(f"Your public IP is: {ip}")
+        st.sidebar.markdown("Use this IP in the 'Manual IP Entry' option.")
+    except:
+        st.sidebar.error("Could not detect your public IP. Please try again.")
+
+# Add more helpful information
+st.sidebar.markdown("---")
+st.sidebar.markdown("### Cloudflare API Information")
+st.sidebar.markdown("""
+1. Log in to your Cloudflare dashboard
+2. Go to your domain settings
+3. Find your Zone ID at the bottom right
+4. Create an API token with DNS:Edit permissions
+""")
 
 # Footer
 st.markdown("<hr>", unsafe_allow_html=True)

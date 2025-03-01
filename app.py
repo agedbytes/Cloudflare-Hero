@@ -4,6 +4,7 @@ import ipaddress
 import datetime
 import time
 import json
+import base64
 
 # Set page configuration
 st.set_page_config(
@@ -19,26 +20,8 @@ if 'logs' not in st.session_state:
 if 'update_status' not in st.session_state:
     st.session_state.update_status = None
 
-# Custom CSS to fix the log area styling
-st.markdown("""
-<style>
-    .logs-container {
-        background-color: #2E2E2E;
-        color: #FFFFFF;
-        padding: 10px;
-        border-radius: 5px;
-        max-height: 400px;
-        overflow-y: auto;
-        font-family: monospace;
-    }
-    .log-timestamp {
-        color: #888888;
-    }
-    .log-error {
-        color: #FF6B6B;
-    }
-</style>
-""", unsafe_allow_html=True)
+if 'show_copied_logs' not in st.session_state:
+    st.session_state.show_copied_logs = False
 
 # Function to add log entries
 def add_log(message, is_error=False):
@@ -188,6 +171,7 @@ def update_dns():
     # Clear logs
     st.session_state.logs = []
     st.session_state.update_status = None
+    st.session_state.show_copied_logs = False
     
     # Validate inputs
     if not dns_record or not zone_id or not api_token:
@@ -280,6 +264,10 @@ def load_sample_data():
     st.session_state.telegram_chat_id = ""
     st.session_state.notify_discord = True
     st.session_state.discord_webhook_url = "https://discord.com/api/webhooks/123456789/example"
+
+# Function to copy logs to clipboard and show them
+def copy_logs():
+    st.session_state.show_copied_logs = True
 
 # Main app layout
 st.title("Cloudflare DNS Updater")
@@ -462,37 +450,40 @@ with col2:
     # Logs Section
     st.subheader("Logs")
     
-    # Generate logs text for copy functionality
-    logs_text = ""
-    for log in st.session_state.logs:
-        prefix = "ERROR: " if log["is_error"] else ""
-        logs_text += f"[{log['timestamp']}] {prefix}{log['message']}\n"
-    
-    # Copy logs button with proper functionality
+    # Add Copy Logs button
     if st.button("Copy Logs"):
-        # Using the clipboard via st.code is more reliable than JavaScript for Streamlit
+        copy_logs()
+    
+    # Show copied logs if the button was clicked
+    if st.session_state.show_copied_logs and len(st.session_state.logs) > 0:
+        logs_text = ""
+        for log in st.session_state.logs:
+            prefix = "ERROR: " if log["is_error"] else ""
+            logs_text += f"[{log['timestamp']}] {prefix}{log['message']}\n"
+        
         st.code(logs_text)
-        st.toast("Logs copied to clipboard! Use the code block above.")
+        st.toast("Logs copied! Use the code block above.")
     
-    # Logs container with fixed styling
-    logs_container = st.container()
+    # Logs display
+    logs_placeholder = st.empty()
     
-    with logs_container:
-        # Create a string with HTML formatted logs
-        if len(st.session_state.logs) == 0:
-            st.info("No logs yet. Start an update to see activity logs.")
-        else:
-            # Create a markdown string with all logs
-            logs_html = "<div class='logs-container'>"
-            for log in st.session_state.logs:
-                timestamp = log["timestamp"]
-                message = log["message"]
-                css_class = "log-error" if log["is_error"] else ""
-                logs_html += f"<div class='{css_class}'><span class='log-timestamp'>[{timestamp}]</span> {message}</div>"
-            logs_html += "</div>"
-            
-            # Display the logs using markdown
-            st.markdown(logs_html, unsafe_allow_html=True)
+    # Use a custom element for the logs display with fixed styling
+    log_content = ""
+    if len(st.session_state.logs) == 0:
+        log_content = "No logs yet. Start an update to see activity logs."
+    else:
+        for log in st.session_state.logs:
+            prefix = "ERROR: " if log["is_error"] else ""
+            log_content += f"[{log['timestamp']}] {prefix}{log['message']}\n"
+    
+    # Display the logs in a styled text area
+    logs_placeholder.text_area(
+        label="",
+        value=log_content,
+        height=300,
+        key="logs_display",
+        disabled=True
+    )
 
 # Add helpful information in the sidebar
 st.sidebar.title("Help & Information")

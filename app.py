@@ -104,27 +104,6 @@ def update_dns_record(zone_id, record_id, dns_record, ip, ttl, proxied, api_toke
         add_log(f"Exception when updating DNS record: {str(e)}", True)
         return False
 
-# Function to send Telegram notification
-def send_telegram_notification(bot_token, chat_id, dns_record, ip, old_ip):
-    if not bot_token or not chat_id:
-        return
-    
-    try:
-        add_log("Sending Telegram notification...")
-        message = f"{dns_record} DNS Record Updated To: {ip} (was {old_ip})"
-        url = f"https://api.telegram.org/bot{bot_token}/sendMessage?chat_id={chat_id}&text={message}"
-        
-        response = requests.get(url)
-        data = response.json()
-        
-        if not data.get("ok"):
-            add_log("Telegram notification failed", True)
-            return
-        
-        add_log("Telegram notification sent successfully")
-    except Exception as e:
-        add_log(f"Error sending Telegram notification: {str(e)}", True)
-
 # Function to send Discord notification
 def send_discord_notification(webhook_url, dns_record, ip, old_ip):
     if not webhook_url:
@@ -157,9 +136,10 @@ def update_dns():
     api_token = st.session_state.api_token
     ttl = st.session_state.ttl
     proxied = st.session_state.proxied
-    notify_telegram = st.session_state.notify_telegram
-    telegram_bot_token = st.session_state.telegram_bot_token if notify_telegram else ""
-    telegram_chat_id = st.session_state.telegram_chat_id if notify_telegram else ""
+    # Telegram notifications are commented out for now
+    # notify_telegram = st.session_state.notify_telegram
+    # telegram_bot_token = st.session_state.telegram_bot_token if notify_telegram else ""
+    # telegram_chat_id = st.session_state.telegram_chat_id if notify_telegram else ""
     notify_discord = st.session_state.notify_discord
     discord_webhook_url = st.session_state.discord_webhook_url if notify_discord else ""
     
@@ -226,14 +206,15 @@ def update_dns():
         return
     
     # Send notifications
-    if notify_telegram and telegram_bot_token and telegram_chat_id:
-        send_telegram_notification(
-            telegram_bot_token,
-            telegram_chat_id,
-            dns_record,
-            ip_address,
-            record_info["content"]
-        )
+    # Telegram notifications are commented out for now
+    # if notify_telegram and telegram_bot_token and telegram_chat_id:
+    #     send_telegram_notification(
+    #         telegram_bot_token,
+    #         telegram_chat_id,
+    #         dns_record,
+    #         ip_address,
+    #         record_info["content"]
+    #     )
     
     if notify_discord and discord_webhook_url:
         send_discord_notification(
@@ -253,9 +234,10 @@ def load_sample_data():
     st.session_state.api_token = "5bcFxQiRsNq5L48bnMcxtn5pIxW-ILueXt_p0Eq0"
     st.session_state.ttl = 120
     st.session_state.proxied = True
-    st.session_state.notify_telegram = False
-    st.session_state.telegram_bot_token = ""
-    st.session_state.telegram_chat_id = ""
+    # Telegram is commented out
+    # st.session_state.notify_telegram = False
+    # st.session_state.telegram_bot_token = ""
+    # st.session_state.telegram_chat_id = ""
     st.session_state.notify_discord = True
     st.session_state.discord_webhook_url = "https://discord.com/api/webhooks/123456789/example"
 
@@ -346,36 +328,36 @@ with col1:
     # Notification Settings
     st.subheader("Notification Settings")
     
-    # Telegram Notifications
-    st.checkbox(
-        "Enable Telegram Notifications", 
-        value=False,
-        key="notify_telegram"
-    )
+    # Telegram Notifications are commented out
+    # st.checkbox(
+    #     "Enable Telegram Notifications", 
+    #     value=False,
+    #     key="notify_telegram"
+    # )
     
-    if st.session_state.notify_telegram:
-        telegram_col1, telegram_col2 = st.columns(2)
-        
-        with telegram_col1:
-            st.text_input(
-                "Telegram Chat ID", 
-                placeholder="Your Telegram chat ID",
-                key="telegram_chat_id"
-            )
-        
-        with telegram_col2:
-            st.text_input(
-                "Telegram Bot API Token", 
-                placeholder="Your bot API token",
-                type="password",
-                key="telegram_bot_token"
-            )
-    else:
-        # Ensure these exist in session state
-        if "telegram_chat_id" not in st.session_state:
-            st.session_state.telegram_chat_id = ""
-        if "telegram_bot_token" not in st.session_state:
-            st.session_state.telegram_bot_token = ""
+    # if st.session_state.notify_telegram:
+    #     telegram_col1, telegram_col2 = st.columns(2)
+    #     
+    #     with telegram_col1:
+    #         st.text_input(
+    #             "Telegram Chat ID", 
+    #             placeholder="Your Telegram chat ID",
+    #             key="telegram_chat_id"
+    #         )
+    #     
+    #     with telegram_col2:
+    #         st.text_input(
+    #             "Telegram Bot API Token", 
+    #             placeholder="Your bot API token",
+    #             type="password",
+    #             key="telegram_bot_token"
+    #         )
+    # else:
+    #     # Ensure these exist in session state
+    #     if "telegram_chat_id" not in st.session_state:
+    #         st.session_state.telegram_chat_id = ""
+    #     if "telegram_bot_token" not in st.session_state:
+    #         st.session_state.telegram_bot_token = ""
     
     # Discord Notifications
     st.checkbox(
@@ -437,8 +419,8 @@ with col2:
         st.markdown(f"**Proxied:** {proxied_display}")
         
         notifications = []
-        if st.session_state.get('notify_telegram', False):
-            notifications.append("Telegram")
+        # if st.session_state.get('notify_telegram', False):
+        #     notifications.append("Telegram")
         if st.session_state.get('notify_discord', False):
             notifications.append("Discord")
         
@@ -448,29 +430,9 @@ with col2:
     # Logs Section
     st.subheader("Logs")
     
-    # Copy Logs button
-    if st.button("Copy Logs"):
-        st.session_state.copy_logs_requested = True
-    
-    # Execute clipboard copy when requested
-    if st.session_state.get("copy_logs_requested", False):
-        logs_text = format_logs()
-        # Escape the text to safely pass it to JavaScript
-        logs_text_escaped = json.dumps(logs_text)
-        st.components.v1.html(
-            f"""
-            <script>
-                navigator.clipboard.writeText({logs_text_escaped}).then(function() {{
-                    console.log('Logs copied to clipboard');
-                }}, function(err) {{
-                    console.error('Could not copy logs: ', err);
-                }});
-            </script>
-            """,
-            height=0  # Hide the component visually
-        )
-        st.session_state.copy_logs_requested = False
-        st.toast("Logs copied to clipboard!")
+    # Disable copy logs button for now
+    # if st.button("Copy Logs"):
+    #     st.session_state.copy_logs_requested = True
     
     # Logs display
     logs_placeholder = st.empty()
@@ -480,11 +442,11 @@ with col2:
     if not log_content:
         log_content = "No logs yet. Start an update to see activity logs."
     
+    # Fixed-height text area for logs
     logs_placeholder.text_area(
         label="",
         value=log_content,
-        height=300,
-        key="logs_display",
+        height=400,  # Increase height for better visibility
         disabled=True
     )
 

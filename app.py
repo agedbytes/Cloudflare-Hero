@@ -2,9 +2,7 @@ import streamlit as st
 import requests
 import ipaddress
 import datetime
-import time
 import json
-import base64
 
 # Set page configuration
 st.set_page_config(
@@ -13,15 +11,12 @@ st.set_page_config(
     layout="wide",
 )
 
-# Initialize session state for logs
+# Initialize session state for logs and update status
 if 'logs' not in st.session_state:
     st.session_state.logs = []
 
 if 'update_status' not in st.session_state:
     st.session_state.update_status = None
-
-if 'show_copied_logs' not in st.session_state:
-    st.session_state.show_copied_logs = False
 
 # Function to add log entries
 def add_log(message, is_error=False):
@@ -171,7 +166,6 @@ def update_dns():
     # Clear logs
     st.session_state.logs = []
     st.session_state.update_status = None
-    st.session_state.show_copied_logs = False
     
     # Validate inputs
     if not dns_record or not zone_id or not api_token:
@@ -265,9 +259,13 @@ def load_sample_data():
     st.session_state.notify_discord = True
     st.session_state.discord_webhook_url = "https://discord.com/api/webhooks/123456789/example"
 
-# Function to copy logs to clipboard and show them
-def copy_logs():
-    st.session_state.show_copied_logs = True
+# Function to format logs
+def format_logs():
+    logs_text = ""
+    for log in st.session_state.logs:
+        prefix = "ERROR: " if log["is_error"] else ""
+        logs_text += f"[{log['timestamp']}] {prefix}{log['message']}\n"
+    return logs_text
 
 # Main app layout
 st.title("Cloudflare DNS Updater")
@@ -450,33 +448,38 @@ with col2:
     # Logs Section
     st.subheader("Logs")
     
-    # Add Copy Logs button
+    # Copy Logs button
     if st.button("Copy Logs"):
-        copy_logs()
+        st.session_state.copy_logs_requested = True
     
-    # Show copied logs if the button was clicked
-    if st.session_state.show_copied_logs and len(st.session_state.logs) > 0:
-        logs_text = ""
-        for log in st.session_state.logs:
-            prefix = "ERROR: " if log["is_error"] else ""
-            logs_text += f"[{log['timestamp']}] {prefix}{log['message']}\n"
-        
-        st.code(logs_text)
-        st.toast("Logs copied! Use the code block above.")
+    # Execute clipboard copy when requested
+    if st.session_state.get("copy_logs_requested", False):
+        logs_text = format_logs()
+        # Escape the text to safely pass it to JavaScript
+        logs_text_escaped = json.dumps(logs_text)
+        st.components.html(
+            f"""
+            <script>
+                navigator.clipboard.writeText({logs_text_escaped}).then(function() {{
+                    console.log('Logs copied to clipboard');
+                }}, function(err) {{
+                    console.error('Could not copy logs: ', err);
+                }});
+            </script>
+            """,
+            height=0  # Hide the component visually
+        )
+        st.session_state.copy_logs_requested = False
+        st.toast("Logs copied to clipboard!")
     
     # Logs display
     logs_placeholder = st.empty()
     
-    # Use a custom element for the logs display with fixed styling
-    log_content = ""
-    if len(st.session_state.logs) == 0:
+    # Update logs in the text area
+    log_content = format_logs()
+    if not log_content:
         log_content = "No logs yet. Start an update to see activity logs."
-    else:
-        for log in st.session_state.logs:
-            prefix = "ERROR: " if log["is_error"] else ""
-            log_content += f"[{log['timestamp']}] {prefix}{log['message']}\n"
     
-    # Display the logs in a styled text area
     logs_placeholder.text_area(
         label="",
         value=log_content,

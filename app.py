@@ -2,7 +2,7 @@ import streamlit as st
 import requests
 import ipaddress
 import datetime
-import traceback
+import time
 import json
 
 # Set page configuration
@@ -12,61 +12,21 @@ st.set_page_config(
     layout="wide",
 )
 
-# Custom CSS for styling
-st.markdown("""
-<style>
-    .main-header {
-        font-size: 2rem !important;
-        font-weight: bold;
-        margin-bottom: 1rem;
-        color: #0082FF;
-    }
-    .section-header {
-        font-size: 1.3rem !important;
-        font-weight: bold;
-        margin-top: 1rem;
-        margin-bottom: 0.5rem;
-        color: #0082FF;
-    }
-    .log-container {
-        height: 300px;
-        overflow-y: auto;
-        background-color: #2E2E2E;
-        color: #FFFFFF;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        font-family: monospace;
-    }
-    .log-entry {
-        margin-bottom: 0.5rem;
-        line-height: 1.2;
-    }
-    .log-timestamp {
-        color: #888888;
-    }
-    .log-error {
-        color: #FF6B6B;
-    }
-    .small-info {
-        font-size: 0.8rem;
-        color: #6c757d;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# Initialize session state
+# Initialize session state for logs
 if 'logs' not in st.session_state:
     st.session_state.logs = []
+
+if 'update_status' not in st.session_state:
+    st.session_state.update_status = None
 
 # Function to add log entries
 def add_log(message, is_error=False):
     timestamp = datetime.datetime.now().strftime("%H:%M:%S")
-    entry = {
+    st.session_state.logs.append({
         "timestamp": timestamp,
         "message": message,
         "is_error": is_error
-    }
-    st.session_state.logs.append(entry)
+    })
 
 # Function to validate IP address
 def is_valid_ip(ip):
@@ -76,52 +36,10 @@ def is_valid_ip(ip):
     except ValueError:
         return False
 
-# Function to get user's public IP address with multiple fallbacks
-def get_public_ip():
-    ip_services = [
-        {
-            "url": "https://api.ipify.org?format=json",
-            "parser": lambda resp: resp.json().get("ip")
-        },
-        {
-            "url": "https://api.myip.com",
-            "parser": lambda resp: resp.json().get("ip")
-        },
-        {
-            "url": "https://ipinfo.io/json",
-            "parser": lambda resp: resp.json().get("ip")
-        },
-        {
-            "url": "https://checkip.amazonaws.com",
-            "parser": lambda resp: resp.text.strip()
-        },
-        {
-            "url": "https://icanhazip.com",
-            "parser": lambda resp: resp.text.strip()
-        },
-        {
-            "url": "https://ifconfig.me/ip",
-            "parser": lambda resp: resp.text.strip()
-        }
-    ]
-    
-    for service in ip_services:
-        try:
-            response = requests.get(service["url"], timeout=3)
-            if response.status_code == 200:
-                ip = service["parser"](response)
-                if ip and is_valid_ip(ip):
-                    return ip
-        except:
-            continue
-    
-    return None
-
 # Function to get DNS record info from Cloudflare
 def get_dns_record_info(zone_id, dns_record, api_token):
     try:
         add_log(f"Getting DNS record info for {dns_record}...")
-        add_log(f"Fetching DNS record info for {dns_record}...")
         url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records?name={dns_record}"
         headers = {
             "Authorization": f"Bearer {api_token}",
@@ -130,8 +48,6 @@ def get_dns_record_info(zone_id, dns_record, api_token):
         
         response = requests.get(url, headers=headers)
         data = response.json()
-        
-        add_log(f"Response from Cloudflare: {data}")
         
         if not data.get("success"):
             error_msg = "Unknown error"
@@ -151,7 +67,6 @@ def get_dns_record_info(zone_id, dns_record, api_token):
         return record_info
     except Exception as e:
         add_log(f"Exception when fetching DNS record info: {str(e)}", True)
-        add_log(traceback.format_exc(), True)
         return None
 
 # Function to update DNS record
@@ -177,8 +92,6 @@ def update_dns_record(zone_id, record_id, dns_record, ip, ttl, proxied, api_toke
         response = requests.put(url, headers=headers, json=body)
         data = response.json()
         
-        add_log(f"Response from Cloudflare: {data}")
-        
         if not data.get("success"):
             error_msg = "Unknown error"
             if data.get("errors") and len(data["errors"]) > 0:
@@ -190,7 +103,6 @@ def update_dns_record(zone_id, record_id, dns_record, ip, ttl, proxied, api_toke
         return True
     except Exception as e:
         add_log(f"Exception when updating DNS record: {str(e)}", True)
-        add_log(traceback.format_exc(), True)
         return False
 
 # Function to send Telegram notification
@@ -348,106 +260,32 @@ def load_sample_data():
     st.session_state.notify_discord = True
     st.session_state.discord_webhook_url = "https://discord.com/api/webhooks/123456789/example"
 
-# Function to copy logs to clipboard
-def get_logs_text():
-    logs_text = ""
-    for log in st.session_state.logs:
-        prefix = "ERROR: " if log["is_error"] else ""
-        logs_text += f"[{log['timestamp']}] {prefix}{log['message']}\n"
-    return logs_text
-
-# Attempt to get the user's IP at the start (this happens server-side)
-server_detected_ip = get_public_ip()
-
 # Main app layout
-st.markdown("<h1 class='main-header'>Cloudflare DNS Updater</h1>", unsafe_allow_html=True)
+st.title("Cloudflare DNS Updater")
 
 # Create two columns for the layout
 col1, col2 = st.columns([2, 1])
 
 with col1:
-    # DNS Configuration Form
-    st.markdown("<h2 class='section-header'>DNS Configuration</h2>", unsafe_allow_html=True)
-    
-    # IP Address Section
-    ip_col1, ip_col2 = st.columns([3, 1])
-    
-    with ip_col1:
-        # IP Address Input field
-        if server_detected_ip:
-            ip_placeholder = server_detected_ip
-            ip_help = f"Detected IP: {server_detected_ip} (server-side detection)"
-        else:
-            ip_placeholder = "Enter your IP address"
-            ip_help = "Enter the IP address you want to use for the DNS record"
-            
-        st.text_input(
-            "IP Address",
-            placeholder=ip_placeholder,
-            help=ip_help,
-            key="ip_address"
-        )
-    
-    with ip_col2:
-        # Only show the button if we actually detected an IP
-        if server_detected_ip:
-            if st.button("Use Detected IP"):
-                st.session_state.ip_address = server_detected_ip
-                st.rerun()
-    
-    # Client-side IP detection with JavaScript
-    st.markdown("### Detect Your IP Address (Client-side)")
+    # Check your IP section
+    st.subheader("Check Your Public IP")
     st.markdown("""
-    <div id="ip-display">Loading your IP address...</div>
-    <script>
-        async function getIp() {
-            try {
-                // Try multiple services
-                const services = [
-                    'https://api.ipify.org?format=json',
-                    'https://api.my-ip.io/ip.json',
-                    'https://api.db-ip.com/v2/free/self'
-                ];
-                
-                for (const service of services) {
-                    try {
-                        const response = await fetch(service);
-                        const data = await response.json();
-                        // Different APIs return IP in different fields
-                        return data.ip || data.ipAddress;
-                    } catch (e) {
-                        console.error("Error with service:", service, e);
-                    }
-                }
-                return "Could not detect your IP";
-            } catch (error) {
-                return "Error detecting IP: " + error.message;
-            }
-        }
-        
-        // Update the display with IP address
-        getIp().then(ip => {
-            document.getElementById('ip-display').innerHTML = 
-                'Your browser detected IP: <strong>' + ip + '</strong> ' +
-                '<button onclick="useThisIp(\'' + ip + '\')">Use This IP</button>';
-        });
-        
-        // Function to use the detected IP
-        function useThisIp(ip) {
-            // Find the IP input field and set its value
-            const inputs = document.querySelectorAll('input');
-            for (const input of inputs) {
-                if (input.placeholder.includes("IP address")) {
-                    input.value = ip;
-                    // Trigger an input event to update Streamlit
-                    const event = new Event('input', { bubbles: true });
-                    input.dispatchEvent(event);
-                    break;
-                }
-            }
-        }
-    </script>
-    """, unsafe_allow_html=True)
+    To find your current public IP address, visit one of these sites:
+    - [ipify.org](https://api.ipify.org)
+    - [WhatIsMyIP.com](https://www.whatismyip.com/)
+    - [icanhazip.com](https://icanhazip.com)
+    """)
+    
+    # DNS Configuration Form
+    st.subheader("DNS Configuration")
+    
+    # IP Address Input field
+    st.text_input(
+        "IP Address",
+        placeholder="Enter your IP address",
+        help="Enter the IP address you want to use for the DNS record",
+        key="ip_address"
+    )
     
     # DNS Record Input
     st.text_input(
@@ -499,7 +337,7 @@ with col1:
         )
     
     # Notification Settings
-    st.markdown("<h2 class='section-header'>Notification Settings</h2>", unsafe_allow_html=True)
+    st.subheader("Notification Settings")
     
     # Telegram Notifications
     st.checkbox(
@@ -561,7 +399,7 @@ with col1:
 
 with col2:
     # Status Section
-    st.markdown("<h2 class='section-header'>Status</h2>", unsafe_allow_html=True)
+    st.subheader("Status")
     
     status_container = st.container()
     
@@ -575,7 +413,7 @@ with col2:
                 st.info("No changes needed")
     
     # Display current settings
-    st.markdown("#### Current Settings")
+    st.subheader("Current Settings")
     
     settings_container = st.container()
     
@@ -601,52 +439,53 @@ with col2:
         st.markdown(f"**Notifications:** {notifications_display}")
     
     # Logs Section
-    st.markdown("<h2 class='section-header'>Logs</h2>", unsafe_allow_html=True)
+    st.subheader("Logs")
     
     # Add a copy button for logs
-    if st.button("Copy Logs to Clipboard"):
-        logs_text = get_logs_text()
-        st.code(logs_text, language=None)
-        st.toast("Logs copied to clipboard (use the code block above)")
+    logs_text = ""
+    for log in st.session_state.logs:
+        prefix = "ERROR: " if log["is_error"] else ""
+        logs_text += f"[{log['timestamp']}] {prefix}{log['message']}\n"
     
+    if st.button("Copy Logs"):
+        st.code(logs_text)
+        st.toast("Logs copied! Use the code block above.")
+    
+    # Display logs in a scrollable container
     log_container = st.container()
     
     with log_container:
-        log_panel = st.empty()
-        
-        log_html = "<div class='log-container'>"
+        for log in st.session_state.logs:
+            if log["is_error"]:
+                st.error(f"[{log['timestamp']}] {log['message']}")
+            else:
+                st.text(f"[{log['timestamp']}] {log['message']}")
         
         if len(st.session_state.logs) == 0:
-            log_html += "<div class='log-entry' style='color: #888;'>No logs yet. Start an update to see activity logs.</div>"
-        else:
-            for log in st.session_state.logs:
-                css_class = "log-error" if log["is_error"] else ""
-                log_html += f"<div class='log-entry {css_class}'><span class='log-timestamp'>[{log['timestamp']}]</span> {log['message']}</div>"
-        
-        log_html += "</div>"
-        log_panel.markdown(log_html, unsafe_allow_html=True)
+            st.info("No logs yet. Start an update to see activity logs.")
 
 # Add helpful information in the sidebar
 st.sidebar.title("Help & Information")
 
-st.sidebar.markdown("### About This App")
+st.sidebar.subheader("About This App")
 st.sidebar.markdown("""
 This app helps you update your Cloudflare DNS records with your current IP address.
 
 It's perfect for maintaining access to home servers or services when your ISP changes your IP address.
 """)
 
-st.sidebar.markdown("---")
-st.sidebar.markdown("### Troubleshooting")
+st.sidebar.subheader("How to Find Your IP")
 st.sidebar.markdown("""
-If you're experiencing issues:
-
-1. Make sure your Cloudflare API token has the correct permissions (Zone:DNS:Edit)
-2. Verify that the DNS record already exists in your Cloudflare account
-3. Check that your Zone ID is correct
-4. If you're using Cloudflare proxy, make sure the IP is publicly accessible
+Visit one of these sites to find your current public IP address:
+- [ipify.org](https://api.ipify.org)
+- [WhatIsMyIP.com](https://www.whatismyip.com/)
+- [icanhazip.com](https://icanhazip.com)
 """)
 
-# Footer
-st.markdown("<hr>", unsafe_allow_html=True)
-st.markdown("<p class='small-info'>Cloudflare DNS Updater • Inspired by PowerShell Scripts</p>", unsafe_allow_html=True)
+st.sidebar.subheader("Cloudflare Information")
+st.sidebar.markdown("""
+1. Log in to your Cloudflare dashboard
+2. Go to your domain settings
+3. Find your Zone ID at the bottom right
+4. Create an API token with DNS:Edit permissions
+""")

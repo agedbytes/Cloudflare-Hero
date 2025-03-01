@@ -11,11 +11,16 @@ st.set_page_config(
     page_title="Cloudflare DNS Updater",
     page_icon="🌐",
     layout="wide",
+    initial_sidebar_state="collapsed"
 )
 
 # Custom CSS for styling
 st.markdown("""
 <style>
+    body {
+        background-color: #121212;
+        color: #ffffff;
+    }
     .main-header {
         font-size: 2rem !important;
         font-weight: bold;
@@ -82,7 +87,7 @@ st.markdown("""
     }
     .ip-container {
         padding: 1rem;
-        background-color: #f8f9fa;
+        background-color: #1E1E1E;
         border-radius: 0.5rem;
         margin-bottom: 1rem;
     }
@@ -91,74 +96,14 @@ st.markdown("""
         font-size: 1.2rem;
         color: #0082FF;
     }
+    .stButton button {
+        background-color: #0082FF;
+        color: white;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# JavaScript code to fetch the user's IP address from multiple services
-ip_detection_html = """
-<div id="ip-detection">
-    <p>Detecting your IP address... <span id="loading">⏳</span></p>
-    <div id="ip-result" style="display:none;">
-        <p>Your public IP address is: <span id="ip-address" class="ip-address"></span></p>
-        <button id="use-this-ip" style="background-color: #0082FF; color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer;">Use This IP</button>
-    </div>
-    <div id="ip-error" style="display:none; color: #721c24;">
-        Could not detect your IP address. Please try again or enter it manually.
-    </div>
-</div>
-
-<script>
-    // Function to detect IP from multiple services
-    async function detectIP() {
-        const services = [
-            'https://api.ipify.org?format=json',
-            'https://api.ip.sb/jsonip',
-            'https://api.myip.com',
-            'https://ipinfo.io/json'
-        ];
-        
-        for (const service of services) {
-            try {
-                const response = await fetch(service);
-                const data = await response.json();
-                // Different APIs return IP in different fields
-                const ip = data.ip || data.query || data.YourFuckingIPAddress;
-                if (ip) {
-                    return ip;
-                }
-            } catch (error) {
-                console.error(`Error with ${service}:`, error);
-                // Continue to the next service
-            }
-        }
-        
-        throw new Error('Could not detect IP from any service');
-    }
-    
-    // Update the UI with the detected IP
-    detectIP()
-        .then(ip => {
-            document.getElementById('loading').style.display = 'none';
-            document.getElementById('ip-result').style.display = 'block';
-            document.getElementById('ip-address').textContent = ip;
-            
-            // Add event listener to the button
-            document.getElementById('use-this-ip').addEventListener('click', function() {
-                window.parent.postMessage({
-                    type: 'user-ip-detected',
-                    ip: ip
-                }, '*');
-            });
-        })
-        .catch(error => {
-            document.getElementById('loading').style.display = 'none';
-            document.getElementById('ip-error').style.display = 'block';
-            console.error('IP detection error:', error);
-        });
-</script>
-"""
-
-# Initialize session state
+# Initialize session state variables
 if 'logs' not in st.session_state:
     st.session_state.logs = []
     
@@ -173,6 +118,9 @@ if 'user_ip' not in st.session_state:
 
 if 'ip_source' not in st.session_state:
     st.session_state.ip_source = "user_ip"
+    
+if 'detected_ip' not in st.session_state:
+    st.session_state.detected_ip = None
 
 # Function to add log entries
 def add_log(message, is_error=False):
@@ -313,7 +261,7 @@ def update_dns():
     ip_source = st.session_state.ip_source
     custom_ip = st.session_state.custom_ip if ip_source == "custom" else ""
     manual_ip = st.session_state.manual_ip if ip_source == "manual" else ""
-    user_detected_ip = st.session_state.user_ip if ip_source == "user_ip" else ""
+    detected_ip = st.session_state.detected_ip if ip_source == "user_ip" else ""
     dns_record = st.session_state.dns_record
     zone_id = st.session_state.zone_id
     api_token = st.session_state.api_token
@@ -345,17 +293,17 @@ def update_dns():
     
     # Get current IP based on selection
     if ip_source == "user_ip":
-        if not user_detected_ip:
+        if not detected_ip:
             add_log("Error! Your IP address has not been detected yet. Please wait for the detection to complete or choose another IP option.", True)
             st.session_state.update_status = "error"
             return
             
-        if not is_valid_ip(user_detected_ip):
+        if not is_valid_ip(detected_ip):
             add_log("Error! Detected IP address is not valid", True)
             st.session_state.update_status = "error"
             return
             
-        current_ip = user_detected_ip
+        current_ip = detected_ip
         add_log(f"Using your detected IP: {current_ip}")
     elif ip_source == "custom":
         if not is_valid_ip(custom_ip):
@@ -446,41 +394,38 @@ def load_sample_data():
     st.session_state.notify_discord = True
     st.session_state.discord_webhook_url = "https://discord.com/api/webhooks/123456789/example"
 
-# Function to use detected IP
-def use_detected_ip(ip):
-    st.session_state.user_ip = ip
+# Function to use detected IP - directly set in session state
+def use_detected_ip():
+    st.session_state.detected_ip = st.session_state.temp_detected_ip
     st.session_state.ip_source = "user_ip"
-    st.rerun()
+
+# Function to detect IP and store in temporary variable
+def detect_ip():
+    ip_detection_services = [
+        "https://api.ipify.org",
+        "https://api.my-ip.io/ip",
+        "https://ipinfo.io/ip",
+        "https://checkip.amazonaws.com"
+    ]
+    
+    for service in ip_detection_services:
+        try:
+            response = requests.get(service, timeout=5)
+            if response.status_code == 200:
+                ip = response.text.strip()
+                if is_valid_ip(ip):
+                    return ip
+        except:
+            continue
+    
+    return None
+
+# Detect IP at startup or if not already detected
+if 'temp_detected_ip' not in st.session_state:
+    st.session_state.temp_detected_ip = detect_ip()
 
 # Main app layout
 st.markdown("<h1 class='main-header'>Cloudflare DNS Updater</h1>", unsafe_allow_html=True)
-
-# JavaScript message handling for IP detection
-components.html(
-    """
-    <script>
-    window.addEventListener('message', function(event) {
-        if (event.data.type === 'user-ip-detected') {
-            window.parent.postMessage({
-                type: 'streamlit:set_session_state',
-                items: [
-                    {
-                        key: 'user_ip',
-                        value: event.data.ip
-                    },
-                    {
-                        key: 'ip_source',
-                        value: 'user_ip'
-                    }
-                ],
-                rerun: true
-            }, '*');
-        }
-    });
-    </script>
-    """,
-    height=0,
-)
 
 # Create two columns for the layout
 col1, col2 = st.columns([2, 1])
@@ -490,16 +435,22 @@ with col1:
     st.markdown("<h2 class='section-header'>DNS Configuration</h2>", unsafe_allow_html=True)
     
     # IP Detection and Selection Section
-    st.markdown("<div class='ip-container'>", unsafe_allow_html=True)
     st.markdown("<h3>Your IP Address</h3>", unsafe_allow_html=True)
-    components.html(ip_detection_html, height=120)
-    st.markdown("</div>", unsafe_allow_html=True)
+    
+    # Display detected IP (or error message)
+    if st.session_state.temp_detected_ip:
+        st.markdown(f"Your public IP address is: **{st.session_state.temp_detected_ip}**")
+        if st.button("Use This IP"):
+            use_detected_ip()
+            st.rerun()
+    else:
+        st.error("Could not detect your IP address. Please try entering it manually.")
     
     # IP Source Selection
     st.radio(
         "IP Source", 
         options=["user_ip", "manual", "custom"],
-        index=0 if st.session_state.user_ip else 1, 
+        index=0 if st.session_state.detected_ip else 1, 
         key="ip_source",
         format_func=lambda x: {
             "user_ip": "Use my detected IP address",
@@ -689,7 +640,7 @@ with col2:
         # Display the current IP based on the selected source
         current_ip_display = "Unknown"
         if st.session_state.ip_source == "user_ip":
-            current_ip_display = st.session_state.user_ip or "Waiting for detection..."
+            current_ip_display = st.session_state.detected_ip or "Waiting for detection..."
         elif st.session_state.ip_source == "custom":
             current_ip_display = st.session_state.custom_ip or "Not set"
         else:  # manual
@@ -738,11 +689,11 @@ with col2:
 # Add helpful information in the sidebar
 st.sidebar.title("Help & Information")
 
-st.sidebar.markdown("### How This Works")
+st.sidebar.markdown("### About This App")
 st.sidebar.markdown("""
-This app uses JavaScript to directly detect your public IP address from your browser, similar to how ipchicken.com works. This gives you your actual IP address, not the server's.
+This app helps you update your Cloudflare DNS records automatically with your current IP address.
 
-When you click "Use This IP", it will automatically be selected for your DNS updates.
+It's perfect for maintaining access to home servers or services when your ISP changes your IP address.
 """)
 
 st.sidebar.markdown("---")
@@ -752,16 +703,6 @@ st.sidebar.markdown("""
 2. Go to your domain settings
 3. Find your Zone ID at the bottom right
 4. Create an API token with DNS:Edit permissions
-""")
-
-st.sidebar.markdown("---")
-st.sidebar.markdown("### About Proxying")
-st.sidebar.markdown("""
-Cloudflare Proxy can only be used with public IP addresses that Cloudflare can reach. 
-
-It cannot be used with:
-- Private/internal IPs (192.168.x.x, 10.x.x.x, etc.)
-- IPs that Cloudflare cannot route to
 """)
 
 # Footer

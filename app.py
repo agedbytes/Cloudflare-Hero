@@ -226,12 +226,12 @@ def update_dns():
     
     st.session_state.update_status = "success"
 
-# Function to load sample data
+# Function to load sample data with completely fake information
 def load_sample_data():
-    st.session_state.ip_address = "192.0.2.1"  # Example IP
-    st.session_state.dns_record = "home.example.com"
-    st.session_state.zone_id = "346d3eba30e4a4d282f23fef3b4add60"
-    st.session_state.api_token = "5bcFxQiRsNq5L48bnMcxtn5pIxW-ILueXt_p0Eq0"
+    st.session_state.ip_address = "203.0.113.42"  # Example IP from TEST-NET-3 block
+    st.session_state.dns_record = "myserver.example.com"
+    st.session_state.zone_id = "abcdef0123456789abcdef0123456789"
+    st.session_state.api_token = "ExampleToken1234567890ExampleToken1234567890"
     st.session_state.ttl = 120
     st.session_state.proxied = True
     # Telegram is commented out
@@ -239,7 +239,7 @@ def load_sample_data():
     # st.session_state.telegram_bot_token = ""
     # st.session_state.telegram_chat_id = ""
     st.session_state.notify_discord = True
-    st.session_state.discord_webhook_url = "https://discord.com/api/webhooks/123456789/example"
+    st.session_state.discord_webhook_url = "https://discord.com/api/webhooks/123456789/example-webhook-url"
 
 # Function to format logs
 def format_logs():

@@ -3,6 +3,7 @@ import requests
 import ipaddress
 import datetime
 import traceback
+import json
 
 # Set page configuration
 st.set_page_config(
@@ -60,16 +61,12 @@ if 'logs' not in st.session_state:
 # Function to add log entries
 def add_log(message, is_error=False):
     timestamp = datetime.datetime.now().strftime("%H:%M:%S")
-    st.session_state.logs.append({
+    entry = {
         "timestamp": timestamp,
         "message": message,
         "is_error": is_error
-    })
-    # Print to console as well for debugging
-    if is_error:
-        print(f"ERROR [{timestamp}]: {message}")
-    else:
-        print(f"LOG [{timestamp}]: {message}")
+    }
+    st.session_state.logs.append(entry)
 
 # Function to validate IP address
 def is_valid_ip(ip):
@@ -79,35 +76,51 @@ def is_valid_ip(ip):
     except ValueError:
         return False
 
-# Function to get user's public IP address
+# Function to get user's public IP address with multiple fallbacks
 def get_public_ip():
-    services = [
-        "https://api.ipify.org",
-        "https://checkip.amazonaws.com",
-        "https://ipinfo.io/ip",
-        "https://icanhazip.com"
+    ip_services = [
+        {
+            "url": "https://api.ipify.org?format=json",
+            "parser": lambda resp: resp.json().get("ip")
+        },
+        {
+            "url": "https://api.myip.com",
+            "parser": lambda resp: resp.json().get("ip")
+        },
+        {
+            "url": "https://ipinfo.io/json",
+            "parser": lambda resp: resp.json().get("ip")
+        },
+        {
+            "url": "https://checkip.amazonaws.com",
+            "parser": lambda resp: resp.text.strip()
+        },
+        {
+            "url": "https://icanhazip.com",
+            "parser": lambda resp: resp.text.strip()
+        },
+        {
+            "url": "https://ifconfig.me/ip",
+            "parser": lambda resp: resp.text.strip()
+        }
     ]
     
-    for service in services:
+    for service in ip_services:
         try:
-            add_log(f"Trying to get IP from {service}")
-            response = requests.get(service, timeout=5)
+            response = requests.get(service["url"], timeout=3)
             if response.status_code == 200:
-                ip = response.text.strip()
-                if is_valid_ip(ip):
-                    add_log(f"Successfully got IP {ip} from {service}")
+                ip = service["parser"](response)
+                if ip and is_valid_ip(ip):
                     return ip
-                else:
-                    add_log(f"Invalid IP format received from {service}: {ip}", True)
-        except Exception as e:
-            add_log(f"Failed to get IP from {service}: {str(e)}", True)
+        except:
+            continue
     
-    add_log("Failed to get IP from any service", True)
     return None
 
 # Function to get DNS record info from Cloudflare
 def get_dns_record_info(zone_id, dns_record, api_token):
     try:
+        add_log(f"Getting DNS record info for {dns_record}...")
         add_log(f"Fetching DNS record info for {dns_record}...")
         url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records?name={dns_record}"
         headers = {
@@ -144,7 +157,7 @@ def get_dns_record_info(zone_id, dns_record, api_token):
 # Function to update DNS record
 def update_dns_record(zone_id, record_id, dns_record, ip, ttl, proxied, api_token):
     try:
-        add_log(f"Updating DNS record to {ip}...")
+        add_log(f"Updating DNS record {dns_record} to {ip}...")
         url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records/{record_id}"
         headers = {
             "Authorization": f"Bearer {api_token}",
@@ -174,7 +187,6 @@ def update_dns_record(zone_id, record_id, dns_record, ip, ttl, proxied, api_toke
             return False
         
         add_log(f"Successfully updated {dns_record} to {ip}")
-        add_log(f"TTL: {ttl}, Proxied: {proxied}")
         return True
     except Exception as e:
         add_log(f"Exception when updating DNS record: {str(e)}", True)
@@ -273,7 +285,6 @@ def update_dns():
         return
     
     # Get DNS record info
-    add_log(f"Getting DNS record info for {dns_record}...")
     record_info = get_dns_record_info(zone_id, dns_record, api_token)
     
     if not record_info:
@@ -288,7 +299,6 @@ def update_dns():
         return
     
     # Update DNS record
-    add_log(f"Updating DNS record {dns_record} to {ip_address}...")
     update_success = update_dns_record(
         zone_id, 
         record_info["id"], 
@@ -322,12 +332,11 @@ def update_dns():
             record_info["content"]
         )
     
-    add_log("DNS update completed successfully")
     st.session_state.update_status = "success"
 
 # Function to load sample data
 def load_sample_data():
-    st.session_state.ip_address = "192.0.2.1" # Example IP - change this to your actual IP
+    st.session_state.ip_address = "192.0.2.1"  # Example IP
     st.session_state.dns_record = "home.example.com"
     st.session_state.zone_id = "346d3eba30e4a4d282f23fef3b4add60"
     st.session_state.api_token = "5bcFxQiRsNq5L48bnMcxtn5pIxW-ILueXt_p0Eq0"
@@ -339,11 +348,16 @@ def load_sample_data():
     st.session_state.notify_discord = True
     st.session_state.discord_webhook_url = "https://discord.com/api/webhooks/123456789/example"
 
-# Get user's IP once on page load
-try:
-    user_ip = get_public_ip()
-except:
-    user_ip = None
+# Function to copy logs to clipboard
+def get_logs_text():
+    logs_text = ""
+    for log in st.session_state.logs:
+        prefix = "ERROR: " if log["is_error"] else ""
+        logs_text += f"[{log['timestamp']}] {prefix}{log['message']}\n"
+    return logs_text
+
+# Attempt to get the user's IP at the start (this happens server-side)
+server_detected_ip = get_public_ip()
 
 # Main app layout
 st.markdown("<h1 class='main-header'>Cloudflare DNS Updater</h1>", unsafe_allow_html=True)
@@ -355,21 +369,85 @@ with col1:
     # DNS Configuration Form
     st.markdown("<h2 class='section-header'>DNS Configuration</h2>", unsafe_allow_html=True)
     
-    # IP Address Input
-    if user_ip:
-        st.info(f"Your detected public IP address is: {user_ip}")
-        
-        if st.button("Use This IP Address"):
-            st.session_state.ip_address = user_ip
-            add_log(f"Using detected IP: {user_ip}")
+    # IP Address Section
+    ip_col1, ip_col2 = st.columns([3, 1])
     
-    st.text_input(
-        "IP Address",
-        value=user_ip if user_ip else "",
-        placeholder="Enter the IP address to use",
-        help="The IP address to set in the DNS record",
-        key="ip_address"
-    )
+    with ip_col1:
+        # IP Address Input field
+        if server_detected_ip:
+            ip_placeholder = server_detected_ip
+            ip_help = f"Detected IP: {server_detected_ip} (server-side detection)"
+        else:
+            ip_placeholder = "Enter your IP address"
+            ip_help = "Enter the IP address you want to use for the DNS record"
+            
+        st.text_input(
+            "IP Address",
+            placeholder=ip_placeholder,
+            help=ip_help,
+            key="ip_address"
+        )
+    
+    with ip_col2:
+        # Only show the button if we actually detected an IP
+        if server_detected_ip:
+            if st.button("Use Detected IP"):
+                st.session_state.ip_address = server_detected_ip
+                st.rerun()
+    
+    # Client-side IP detection with JavaScript
+    st.markdown("### Detect Your IP Address (Client-side)")
+    st.markdown("""
+    <div id="ip-display">Loading your IP address...</div>
+    <script>
+        async function getIp() {
+            try {
+                // Try multiple services
+                const services = [
+                    'https://api.ipify.org?format=json',
+                    'https://api.my-ip.io/ip.json',
+                    'https://api.db-ip.com/v2/free/self'
+                ];
+                
+                for (const service of services) {
+                    try {
+                        const response = await fetch(service);
+                        const data = await response.json();
+                        // Different APIs return IP in different fields
+                        return data.ip || data.ipAddress;
+                    } catch (e) {
+                        console.error("Error with service:", service, e);
+                    }
+                }
+                return "Could not detect your IP";
+            } catch (error) {
+                return "Error detecting IP: " + error.message;
+            }
+        }
+        
+        // Update the display with IP address
+        getIp().then(ip => {
+            document.getElementById('ip-display').innerHTML = 
+                'Your browser detected IP: <strong>' + ip + '</strong> ' +
+                '<button onclick="useThisIp(\'' + ip + '\')">Use This IP</button>';
+        });
+        
+        // Function to use the detected IP
+        function useThisIp(ip) {
+            // Find the IP input field and set its value
+            const inputs = document.querySelectorAll('input');
+            for (const input of inputs) {
+                if (input.placeholder.includes("IP address")) {
+                    input.value = ip;
+                    // Trigger an input event to update Streamlit
+                    const event = new Event('input', { bubbles: true });
+                    input.dispatchEvent(event);
+                    break;
+                }
+            }
+        }
+    </script>
+    """, unsafe_allow_html=True)
     
     # DNS Record Input
     st.text_input(
@@ -525,24 +603,28 @@ with col2:
     # Logs Section
     st.markdown("<h2 class='section-header'>Logs</h2>", unsafe_allow_html=True)
     
+    # Add a copy button for logs
+    if st.button("Copy Logs to Clipboard"):
+        logs_text = get_logs_text()
+        st.code(logs_text, language=None)
+        st.toast("Logs copied to clipboard (use the code block above)")
+    
     log_container = st.container()
     
     with log_container:
-        st.markdown("<div class='log-container'>", unsafe_allow_html=True)
+        log_panel = st.empty()
+        
+        log_html = "<div class='log-container'>"
         
         if len(st.session_state.logs) == 0:
-            st.markdown("<div class='log-entry' style='color: #888;'>No logs yet. Start an update to see activity logs.</div>", unsafe_allow_html=True)
+            log_html += "<div class='log-entry' style='color: #888;'>No logs yet. Start an update to see activity logs.</div>"
         else:
             for log in st.session_state.logs:
                 css_class = "log-error" if log["is_error"] else ""
-                st.markdown(
-                    f"<div class='log-entry {css_class}'>"
-                    f"<span class='log-timestamp'>[{log['timestamp']}]</span> {log['message']}"
-                    f"</div>", 
-                    unsafe_allow_html=True
-                )
+                log_html += f"<div class='log-entry {css_class}'><span class='log-timestamp'>[{log['timestamp']}]</span> {log['message']}</div>"
         
-        st.markdown("</div>", unsafe_allow_html=True)
+        log_html += "</div>"
+        log_panel.markdown(log_html, unsafe_allow_html=True)
 
 # Add helpful information in the sidebar
 st.sidebar.title("Help & Information")

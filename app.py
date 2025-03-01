@@ -457,7 +457,7 @@ with col2:
         logs_text = format_logs()
         # Escape the text to safely pass it to JavaScript
         logs_text_escaped = json.dumps(logs_text)
-        st.components.html(
+        st.components.v1.html(
             f"""
             <script>
                 navigator.clipboard.writeText({logs_text_escaped}).then(function() {{

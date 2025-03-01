@@ -1,26 +1,19 @@
 import streamlit as st
-import streamlit.components.v1 as components
 import requests
 import ipaddress
-import json
 import datetime
-import re
+import traceback
 
 # Set page configuration
 st.set_page_config(
     page_title="Cloudflare DNS Updater",
     page_icon="🌐",
     layout="wide",
-    initial_sidebar_state="collapsed"
 )
 
 # Custom CSS for styling
 st.markdown("""
 <style>
-    body {
-        background-color: #121212;
-        color: #ffffff;
-    }
     .main-header {
         font-size: 2rem !important;
         font-weight: bold;
@@ -33,34 +26,6 @@ st.markdown("""
         margin-top: 1rem;
         margin-bottom: 0.5rem;
         color: #0082FF;
-    }
-    .success-message {
-        padding: 1rem;
-        background-color: #d4edda;
-        color: #155724;
-        border-radius: 0.5rem;
-        margin-bottom: 1rem;
-    }
-    .error-message {
-        padding: 1rem;
-        background-color: #f8d7da;
-        color: #721c24;
-        border-radius: 0.5rem;
-        margin-bottom: 1rem;
-    }
-    .info-message {
-        padding: 1rem;
-        background-color: #cce5ff;
-        color: #004085;
-        border-radius: 0.5rem;
-        margin-bottom: 1rem;
-    }
-    .warning-message {
-        padding: 1rem;
-        background-color: #fff3cd;
-        color: #856404;
-        border-radius: 0.5rem;
-        margin-bottom: 1rem;
     }
     .log-container {
         height: 300px;
@@ -85,42 +50,12 @@ st.markdown("""
         font-size: 0.8rem;
         color: #6c757d;
     }
-    .ip-container {
-        padding: 1rem;
-        background-color: #1E1E1E;
-        border-radius: 0.5rem;
-        margin-bottom: 1rem;
-    }
-    .ip-address {
-        font-weight: bold;
-        font-size: 1.2rem;
-        color: #0082FF;
-    }
-    .stButton button {
-        background-color: #0082FF;
-        color: white;
-    }
 </style>
 """, unsafe_allow_html=True)
 
-# Initialize session state variables
+# Initialize session state
 if 'logs' not in st.session_state:
     st.session_state.logs = []
-    
-if 'update_status' not in st.session_state:
-    st.session_state.update_status = None
-
-if 'external_ip' not in st.session_state:
-    st.session_state.external_ip = None
-    
-if 'user_ip' not in st.session_state:
-    st.session_state.user_ip = None
-
-if 'ip_source' not in st.session_state:
-    st.session_state.ip_source = "user_ip"
-    
-if 'detected_ip' not in st.session_state:
-    st.session_state.detected_ip = None
 
 # Function to add log entries
 def add_log(message, is_error=False):
@@ -130,6 +65,11 @@ def add_log(message, is_error=False):
         "message": message,
         "is_error": is_error
     })
+    # Print to console as well for debugging
+    if is_error:
+        print(f"ERROR [{timestamp}]: {message}")
+    else:
+        print(f"LOG [{timestamp}]: {message}")
 
 # Function to validate IP address
 def is_valid_ip(ip):
@@ -138,6 +78,32 @@ def is_valid_ip(ip):
         return True
     except ValueError:
         return False
+
+# Function to get user's public IP address
+def get_public_ip():
+    services = [
+        "https://api.ipify.org",
+        "https://checkip.amazonaws.com",
+        "https://ipinfo.io/ip",
+        "https://icanhazip.com"
+    ]
+    
+    for service in services:
+        try:
+            add_log(f"Trying to get IP from {service}")
+            response = requests.get(service, timeout=5)
+            if response.status_code == 200:
+                ip = response.text.strip()
+                if is_valid_ip(ip):
+                    add_log(f"Successfully got IP {ip} from {service}")
+                    return ip
+                else:
+                    add_log(f"Invalid IP format received from {service}: {ip}", True)
+        except Exception as e:
+            add_log(f"Failed to get IP from {service}: {str(e)}", True)
+    
+    add_log("Failed to get IP from any service", True)
+    return None
 
 # Function to get DNS record info from Cloudflare
 def get_dns_record_info(zone_id, dns_record, api_token):
@@ -151,6 +117,8 @@ def get_dns_record_info(zone_id, dns_record, api_token):
         
         response = requests.get(url, headers=headers)
         data = response.json()
+        
+        add_log(f"Response from Cloudflare: {data}")
         
         if not data.get("success"):
             error_msg = "Unknown error"
@@ -169,7 +137,8 @@ def get_dns_record_info(zone_id, dns_record, api_token):
         
         return record_info
     except Exception as e:
-        add_log(f"Error fetching DNS record info: {str(e)}", True)
+        add_log(f"Exception when fetching DNS record info: {str(e)}", True)
+        add_log(traceback.format_exc(), True)
         return None
 
 # Function to update DNS record
@@ -190,8 +159,12 @@ def update_dns_record(zone_id, record_id, dns_record, ip, ttl, proxied, api_toke
             "proxied": proxied
         }
         
+        add_log(f"Sending update request with body: {body}")
+        
         response = requests.put(url, headers=headers, json=body)
         data = response.json()
+        
+        add_log(f"Response from Cloudflare: {data}")
         
         if not data.get("success"):
             error_msg = "Unknown error"
@@ -204,7 +177,8 @@ def update_dns_record(zone_id, record_id, dns_record, ip, ttl, proxied, api_toke
         add_log(f"TTL: {ttl}, Proxied: {proxied}")
         return True
     except Exception as e:
-        add_log(f"Error updating DNS record: {str(e)}", True)
+        add_log(f"Exception when updating DNS record: {str(e)}", True)
+        add_log(traceback.format_exc(), True)
         return False
 
 # Function to send Telegram notification
@@ -251,17 +225,10 @@ def send_discord_notification(webhook_url, dns_record, ip, old_ip):
     except Exception as e:
         add_log(f"Error sending Discord notification: {str(e)}", True)
 
-# Function to update DNS
+# Function to perform the DNS update
 def update_dns():
-    # Reset logs for new update
-    st.session_state.logs = []
-    st.session_state.update_status = None
-    
     # Get form values
-    ip_source = st.session_state.ip_source
-    custom_ip = st.session_state.custom_ip if ip_source == "custom" else ""
-    manual_ip = st.session_state.manual_ip if ip_source == "manual" else ""
-    detected_ip = st.session_state.detected_ip if ip_source == "user_ip" else ""
+    ip_address = st.session_state.ip_address
     dns_record = st.session_state.dns_record
     zone_id = st.session_state.zone_id
     api_token = st.session_state.api_token
@@ -273,9 +240,23 @@ def update_dns():
     notify_discord = st.session_state.notify_discord
     discord_webhook_url = st.session_state.discord_webhook_url if notify_discord else ""
     
+    # Clear logs
+    st.session_state.logs = []
+    st.session_state.update_status = None
+    
     # Validate inputs
     if not dns_record or not zone_id or not api_token:
         add_log("Error: DNS Record, Zone ID, and API Token are required", True)
+        st.session_state.update_status = "error"
+        return
+    
+    if not ip_address:
+        add_log("Error: IP Address is required", True)
+        st.session_state.update_status = "error"
+        return
+    
+    if not is_valid_ip(ip_address):
+        add_log(f"Error: '{ip_address}' is not a valid IP address", True)
         st.session_state.update_status = "error"
         return
     
@@ -291,70 +272,35 @@ def update_dns():
         st.session_state.update_status = "error"
         return
     
-    # Get current IP based on selection
-    if ip_source == "user_ip":
-        if not detected_ip:
-            add_log("Error! Your IP address has not been detected yet. Please wait for the detection to complete or choose another IP option.", True)
-            st.session_state.update_status = "error"
-            return
-            
-        if not is_valid_ip(detected_ip):
-            add_log("Error! Detected IP address is not valid", True)
-            st.session_state.update_status = "error"
-            return
-            
-        current_ip = detected_ip
-        add_log(f"Using your detected IP: {current_ip}")
-    elif ip_source == "custom":
-        if not is_valid_ip(custom_ip):
-            add_log("Error! Invalid custom IP address format", True)
-            st.session_state.update_status = "error"
-            return
-        current_ip = custom_ip
-        add_log(f"Using custom IP: {current_ip}")
-    else:  # manual
-        if not is_valid_ip(manual_ip):
-            add_log("Error! Invalid manually entered IP address format", True)
-            st.session_state.update_status = "error"
-            return
-        current_ip = manual_ip
-        add_log(f"Using manually entered IP: {current_ip}")
-    
-    # Check custom/manual IP and proxied settings
-    if (ip_source in ["custom", "manual"]) and proxied:
-        add_log(f"Error! {ip_source.capitalize()} IP cannot be Proxied", True)
-        st.session_state.update_status = "error"
-        return
-    
-    if not current_ip:
-        st.session_state.update_status = "error"
-        return
-    
     # Get DNS record info
+    add_log(f"Getting DNS record info for {dns_record}...")
     record_info = get_dns_record_info(zone_id, dns_record, api_token)
     
     if not record_info:
+        add_log(f"Failed to get DNS record info for {dns_record}", True)
         st.session_state.update_status = "error"
         return
     
     # Check if update is needed
-    if record_info["content"] == current_ip and record_info["proxied"] == proxied:
-        add_log(f"DNS record IP of {dns_record} is already {current_ip}, no changes needed.")
+    if record_info["content"] == ip_address and record_info["proxied"] == proxied:
+        add_log(f"DNS record IP of {dns_record} is already {ip_address} with proxied={proxied}, no changes needed.")
         st.session_state.update_status = "unchanged"
         return
     
     # Update DNS record
+    add_log(f"Updating DNS record {dns_record} to {ip_address}...")
     update_success = update_dns_record(
         zone_id, 
         record_info["id"], 
         dns_record, 
-        current_ip, 
+        ip_address, 
         ttl, 
         proxied, 
         api_token
     )
     
     if not update_success:
+        add_log("Failed to update DNS record", True)
         st.session_state.update_status = "error"
         return
     
@@ -364,7 +310,7 @@ def update_dns():
             telegram_bot_token,
             telegram_chat_id,
             dns_record,
-            current_ip,
+            ip_address,
             record_info["content"]
         )
     
@@ -372,17 +318,16 @@ def update_dns():
         send_discord_notification(
             discord_webhook_url,
             dns_record,
-            current_ip,
+            ip_address,
             record_info["content"]
         )
     
+    add_log("DNS update completed successfully")
     st.session_state.update_status = "success"
 
 # Function to load sample data
 def load_sample_data():
-    st.session_state.ip_source = "user_ip"
-    st.session_state.custom_ip = "192.168.1.100"
-    st.session_state.manual_ip = ""
+    st.session_state.ip_address = "192.0.2.1" # Example IP - change this to your actual IP
     st.session_state.dns_record = "home.example.com"
     st.session_state.zone_id = "346d3eba30e4a4d282f23fef3b4add60"
     st.session_state.api_token = "5bcFxQiRsNq5L48bnMcxtn5pIxW-ILueXt_p0Eq0"
@@ -394,35 +339,11 @@ def load_sample_data():
     st.session_state.notify_discord = True
     st.session_state.discord_webhook_url = "https://discord.com/api/webhooks/123456789/example"
 
-# Function to use detected IP - directly set in session state
-def use_detected_ip():
-    st.session_state.detected_ip = st.session_state.temp_detected_ip
-    st.session_state.ip_source = "user_ip"
-
-# Function to detect IP and store in temporary variable
-def detect_ip():
-    ip_detection_services = [
-        "https://api.ipify.org",
-        "https://api.my-ip.io/ip",
-        "https://ipinfo.io/ip",
-        "https://checkip.amazonaws.com"
-    ]
-    
-    for service in ip_detection_services:
-        try:
-            response = requests.get(service, timeout=5)
-            if response.status_code == 200:
-                ip = response.text.strip()
-                if is_valid_ip(ip):
-                    return ip
-        except:
-            continue
-    
-    return None
-
-# Detect IP at startup or if not already detected
-if 'temp_detected_ip' not in st.session_state:
-    st.session_state.temp_detected_ip = detect_ip()
+# Get user's IP once on page load
+try:
+    user_ip = get_public_ip()
+except:
+    user_ip = None
 
 # Main app layout
 st.markdown("<h1 class='main-header'>Cloudflare DNS Updater</h1>", unsafe_allow_html=True)
@@ -434,56 +355,21 @@ with col1:
     # DNS Configuration Form
     st.markdown("<h2 class='section-header'>DNS Configuration</h2>", unsafe_allow_html=True)
     
-    # IP Detection and Selection Section
-    st.markdown("<h3>Your IP Address</h3>", unsafe_allow_html=True)
+    # IP Address Input
+    if user_ip:
+        st.info(f"Your detected public IP address is: {user_ip}")
+        
+        if st.button("Use This IP Address"):
+            st.session_state.ip_address = user_ip
+            add_log(f"Using detected IP: {user_ip}")
     
-    # Display detected IP (or error message)
-    if st.session_state.temp_detected_ip:
-        st.markdown(f"Your public IP address is: **{st.session_state.temp_detected_ip}**")
-        if st.button("Use This IP"):
-            use_detected_ip()
-            st.rerun()
-    else:
-        st.error("Could not detect your IP address. Please try entering it manually.")
-    
-    # IP Source Selection
-    st.radio(
-        "IP Source", 
-        options=["user_ip", "manual", "custom"],
-        index=0 if st.session_state.detected_ip else 1, 
-        key="ip_source",
-        format_func=lambda x: {
-            "user_ip": "Use my detected IP address",
-            "manual": "Enter IP manually",
-            "custom": "Custom IP (e.g., internal network IP)"
-        }[x]
+    st.text_input(
+        "IP Address",
+        value=user_ip if user_ip else "",
+        placeholder="Enter the IP address to use",
+        help="The IP address to set in the DNS record",
+        key="ip_address"
     )
-    
-    # Manual IP input (shown only when manual IP is selected)
-    if st.session_state.ip_source == "manual":
-        st.text_input(
-            "Manual IP Address", 
-            placeholder="Enter your IP address",
-            help="Enter a valid IPv4 address",
-            key="manual_ip"
-        )
-    else:
-        # Ensure the manual_ip exists in session state
-        if "manual_ip" not in st.session_state:
-            st.session_state.manual_ip = ""
-    
-    # Custom IP input (shown only when custom IP is selected)
-    if st.session_state.ip_source == "custom":
-        st.text_input(
-            "Custom IP Address", 
-            placeholder="e.g., 192.168.1.100",
-            help="Enter a valid IPv4 address",
-            key="custom_ip"
-        )
-    else:
-        # Ensure the custom_ip exists in session state
-        if "custom_ip" not in st.session_state:
-            st.session_state.custom_ip = ""
     
     # DNS Record Input
     st.text_input(
@@ -527,23 +413,12 @@ with col1:
         )
     
     with ttl_proxy_col2:
-        proxy_disabled = st.session_state.ip_source in ["custom", "manual"]
-        if proxy_disabled:
-            st.checkbox(
-                "Use Cloudflare Proxy", 
-                value=False,
-                disabled=True,
-                help="Proxying is not available with custom or manual IPs",
-                key="proxied"
-            )
-            st.markdown("<p class='small-info'>(Proxying not available with custom/manual IPs)</p>", unsafe_allow_html=True)
-        else:
-            st.checkbox(
-                "Use Cloudflare Proxy", 
-                value=True,
-                help="Enable Cloudflare's proxy features",
-                key="proxied"
-            )
+        st.checkbox(
+            "Use Cloudflare Proxy", 
+            value=True,
+            help="Enable Cloudflare's proxy features (not available for private IPs)",
+            key="proxied"
+        )
     
     # Notification Settings
     st.markdown("<h2 class='section-header'>Notification Settings</h2>", unsafe_allow_html=True)
@@ -613,21 +488,13 @@ with col2:
     status_container = st.container()
     
     with status_container:
-        if st.session_state.update_status == "success":
-            st.markdown(
-                "<div class='success-message'>DNS record updated successfully!</div>", 
-                unsafe_allow_html=True
-            )
-        elif st.session_state.update_status == "error":
-            st.markdown(
-                "<div class='error-message'>Error updating DNS record</div>", 
-                unsafe_allow_html=True
-            )
-        elif st.session_state.update_status == "unchanged":
-            st.markdown(
-                "<div class='info-message'>No changes needed</div>", 
-                unsafe_allow_html=True
-            )
+        if 'update_status' in st.session_state:
+            if st.session_state.update_status == "success":
+                st.success("DNS record updated successfully!")
+            elif st.session_state.update_status == "error":
+                st.error("Error updating DNS record")
+            elif st.session_state.update_status == "unchanged":
+                st.info("No changes needed")
     
     # Display current settings
     st.markdown("#### Current Settings")
@@ -635,30 +502,21 @@ with col2:
     settings_container = st.container()
     
     with settings_container:
-        st.markdown(f"**DNS Record:** {st.session_state.dns_record or 'Not set'}")
+        st.markdown(f"**DNS Record:** {st.session_state.get('dns_record', 'Not set')}")
+        st.markdown(f"**IP Address:** {st.session_state.get('ip_address', 'Not set')}")
         
-        # Display the current IP based on the selected source
-        current_ip_display = "Unknown"
-        if st.session_state.ip_source == "user_ip":
-            current_ip_display = st.session_state.detected_ip or "Waiting for detection..."
-        elif st.session_state.ip_source == "custom":
-            current_ip_display = st.session_state.custom_ip or "Not set"
-        else:  # manual
-            current_ip_display = st.session_state.manual_ip or "Not set"
-        
-        st.markdown(f"**Current IP:** {current_ip_display}")
-        
-        ttl_display = st.session_state.ttl
+        ttl_display = st.session_state.get('ttl', 'Not set')
         if ttl_display == 1:
             ttl_display = "Auto (1)"
         st.markdown(f"**TTL:** {ttl_display} seconds")
         
-        st.markdown(f"**Proxied:** {'Yes' if st.session_state.proxied else 'No'}")
+        proxied_display = "Yes" if st.session_state.get('proxied', False) else "No"
+        st.markdown(f"**Proxied:** {proxied_display}")
         
         notifications = []
-        if st.session_state.notify_telegram:
+        if st.session_state.get('notify_telegram', False):
             notifications.append("Telegram")
-        if st.session_state.notify_discord:
+        if st.session_state.get('notify_discord', False):
             notifications.append("Discord")
         
         notifications_display = ", ".join(notifications) if notifications else "None"
@@ -691,18 +549,20 @@ st.sidebar.title("Help & Information")
 
 st.sidebar.markdown("### About This App")
 st.sidebar.markdown("""
-This app helps you update your Cloudflare DNS records automatically with your current IP address.
+This app helps you update your Cloudflare DNS records with your current IP address.
 
 It's perfect for maintaining access to home servers or services when your ISP changes your IP address.
 """)
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("### Cloudflare API Information")
+st.sidebar.markdown("### Troubleshooting")
 st.sidebar.markdown("""
-1. Log in to your Cloudflare dashboard
-2. Go to your domain settings
-3. Find your Zone ID at the bottom right
-4. Create an API token with DNS:Edit permissions
+If you're experiencing issues:
+
+1. Make sure your Cloudflare API token has the correct permissions (Zone:DNS:Edit)
+2. Verify that the DNS record already exists in your Cloudflare account
+3. Check that your Zone ID is correct
+4. If you're using Cloudflare proxy, make sure the IP is publicly accessible
 """)
 
 # Footer

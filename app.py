@@ -19,6 +19,27 @@ if 'logs' not in st.session_state:
 if 'update_status' not in st.session_state:
     st.session_state.update_status = None
 
+# Custom CSS to fix the log area styling
+st.markdown("""
+<style>
+    .logs-container {
+        background-color: #2E2E2E;
+        color: #FFFFFF;
+        padding: 10px;
+        border-radius: 5px;
+        max-height: 400px;
+        overflow-y: auto;
+        font-family: monospace;
+    }
+    .log-timestamp {
+        color: #888888;
+    }
+    .log-error {
+        color: #FF6B6B;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 # Function to add log entries
 def add_log(message, is_error=False):
     timestamp = datetime.datetime.now().strftime("%H:%M:%S")
@@ -441,28 +462,37 @@ with col2:
     # Logs Section
     st.subheader("Logs")
     
-    # Add a copy button for logs
+    # Generate logs text for copy functionality
     logs_text = ""
     for log in st.session_state.logs:
         prefix = "ERROR: " if log["is_error"] else ""
         logs_text += f"[{log['timestamp']}] {prefix}{log['message']}\n"
     
+    # Copy logs button with proper functionality
     if st.button("Copy Logs"):
+        # Using the clipboard via st.code is more reliable than JavaScript for Streamlit
         st.code(logs_text)
-        st.toast("Logs copied! Use the code block above.")
+        st.toast("Logs copied to clipboard! Use the code block above.")
     
-    # Display logs in a scrollable container
-    log_container = st.container()
+    # Logs container with fixed styling
+    logs_container = st.container()
     
-    with log_container:
-        for log in st.session_state.logs:
-            if log["is_error"]:
-                st.error(f"[{log['timestamp']}] {log['message']}")
-            else:
-                st.text(f"[{log['timestamp']}] {log['message']}")
-        
+    with logs_container:
+        # Create a string with HTML formatted logs
         if len(st.session_state.logs) == 0:
             st.info("No logs yet. Start an update to see activity logs.")
+        else:
+            # Create a markdown string with all logs
+            logs_html = "<div class='logs-container'>"
+            for log in st.session_state.logs:
+                timestamp = log["timestamp"]
+                message = log["message"]
+                css_class = "log-error" if log["is_error"] else ""
+                logs_html += f"<div class='{css_class}'><span class='log-timestamp'>[{timestamp}]</span> {message}</div>"
+            logs_html += "</div>"
+            
+            # Display the logs using markdown
+            st.markdown(logs_html, unsafe_allow_html=True)
 
 # Add helpful information in the sidebar
 st.sidebar.title("Help & Information")

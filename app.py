@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import requests
 import ipaddress
 import json
@@ -79,10 +80,85 @@ st.markdown("""
         font-size: 0.8rem;
         color: #6c757d;
     }
+    .ip-container {
+        padding: 1rem;
+        background-color: #f8f9fa;
+        border-radius: 0.5rem;
+        margin-bottom: 1rem;
+    }
+    .ip-address {
+        font-weight: bold;
+        font-size: 1.2rem;
+        color: #0082FF;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# Initialize session state for logs
+# JavaScript code to fetch the user's IP address from multiple services
+ip_detection_html = """
+<div id="ip-detection">
+    <p>Detecting your IP address... <span id="loading">⏳</span></p>
+    <div id="ip-result" style="display:none;">
+        <p>Your public IP address is: <span id="ip-address" class="ip-address"></span></p>
+        <button id="use-this-ip" style="background-color: #0082FF; color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer;">Use This IP</button>
+    </div>
+    <div id="ip-error" style="display:none; color: #721c24;">
+        Could not detect your IP address. Please try again or enter it manually.
+    </div>
+</div>
+
+<script>
+    // Function to detect IP from multiple services
+    async function detectIP() {
+        const services = [
+            'https://api.ipify.org?format=json',
+            'https://api.ip.sb/jsonip',
+            'https://api.myip.com',
+            'https://ipinfo.io/json'
+        ];
+        
+        for (const service of services) {
+            try {
+                const response = await fetch(service);
+                const data = await response.json();
+                // Different APIs return IP in different fields
+                const ip = data.ip || data.query || data.YourFuckingIPAddress;
+                if (ip) {
+                    return ip;
+                }
+            } catch (error) {
+                console.error(`Error with ${service}:`, error);
+                // Continue to the next service
+            }
+        }
+        
+        throw new Error('Could not detect IP from any service');
+    }
+    
+    // Update the UI with the detected IP
+    detectIP()
+        .then(ip => {
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('ip-result').style.display = 'block';
+            document.getElementById('ip-address').textContent = ip;
+            
+            // Add event listener to the button
+            document.getElementById('use-this-ip').addEventListener('click', function() {
+                window.parent.postMessage({
+                    type: 'user-ip-detected',
+                    ip: ip
+                }, '*');
+            });
+        })
+        .catch(error => {
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('ip-error').style.display = 'block';
+            console.error('IP detection error:', error);
+        });
+</script>
+"""
+
+# Initialize session state
 if 'logs' not in st.session_state:
     st.session_state.logs = []
     
@@ -91,6 +167,12 @@ if 'update_status' not in st.session_state:
 
 if 'external_ip' not in st.session_state:
     st.session_state.external_ip = None
+    
+if 'user_ip' not in st.session_state:
+    st.session_state.user_ip = None
+
+if 'ip_source' not in st.session_state:
+    st.session_state.ip_source = "user_ip"
 
 # Function to add log entries
 def add_log(message, is_error=False):
@@ -100,32 +182,6 @@ def add_log(message, is_error=False):
         "message": message,
         "is_error": is_error
     })
-
-# Try multiple IP detection services to increase reliability
-def get_external_ip():
-    services = [
-        "https://checkip.amazonaws.com",
-        "https://api.ipify.org",
-        "https://icanhazip.com",
-        "https://ifconfig.me/ip"
-    ]
-    
-    add_log("Fetching external IP...")
-    
-    for service in services:
-        try:
-            response = requests.get(service, timeout=5)
-            if response.status_code == 200:
-                ip = response.text.strip()
-                if is_valid_ip(ip):
-                    add_log(f"External IP detected: {ip}")
-                    st.session_state.external_ip = ip
-                    return ip
-        except Exception:
-            continue
-    
-    add_log("Failed to detect external IP from all services", True)
-    return None
 
 # Function to validate IP address
 def is_valid_ip(ip):
@@ -257,6 +313,7 @@ def update_dns():
     ip_source = st.session_state.ip_source
     custom_ip = st.session_state.custom_ip if ip_source == "custom" else ""
     manual_ip = st.session_state.manual_ip if ip_source == "manual" else ""
+    user_detected_ip = st.session_state.user_ip if ip_source == "user_ip" else ""
     dns_record = st.session_state.dns_record
     zone_id = st.session_state.zone_id
     api_token = st.session_state.api_token
@@ -287,8 +344,19 @@ def update_dns():
         return
     
     # Get current IP based on selection
-    if ip_source == "external":
-        current_ip = get_external_ip()
+    if ip_source == "user_ip":
+        if not user_detected_ip:
+            add_log("Error! Your IP address has not been detected yet. Please wait for the detection to complete or choose another IP option.", True)
+            st.session_state.update_status = "error"
+            return
+            
+        if not is_valid_ip(user_detected_ip):
+            add_log("Error! Detected IP address is not valid", True)
+            st.session_state.update_status = "error"
+            return
+            
+        current_ip = user_detected_ip
+        add_log(f"Using your detected IP: {current_ip}")
     elif ip_source == "custom":
         if not is_valid_ip(custom_ip):
             add_log("Error! Invalid custom IP address format", True)
@@ -364,7 +432,7 @@ def update_dns():
 
 # Function to load sample data
 def load_sample_data():
-    st.session_state.ip_source = "external"
+    st.session_state.ip_source = "user_ip"
     st.session_state.custom_ip = "192.168.1.100"
     st.session_state.manual_ip = ""
     st.session_state.dns_record = "home.example.com"
@@ -378,15 +446,41 @@ def load_sample_data():
     st.session_state.notify_discord = True
     st.session_state.discord_webhook_url = "https://discord.com/api/webhooks/123456789/example"
 
-# Try to detect external IP at app startup
-if st.session_state.external_ip is None:
-    try:
-        st.session_state.external_ip = get_external_ip()
-    except:
-        pass
+# Function to use detected IP
+def use_detected_ip(ip):
+    st.session_state.user_ip = ip
+    st.session_state.ip_source = "user_ip"
+    st.rerun()
 
 # Main app layout
 st.markdown("<h1 class='main-header'>Cloudflare DNS Updater</h1>", unsafe_allow_html=True)
+
+# JavaScript message handling for IP detection
+components.html(
+    """
+    <script>
+    window.addEventListener('message', function(event) {
+        if (event.data.type === 'user-ip-detected') {
+            window.parent.postMessage({
+                type: 'streamlit:set_session_state',
+                items: [
+                    {
+                        key: 'user_ip',
+                        value: event.data.ip
+                    },
+                    {
+                        key: 'ip_source',
+                        value: 'user_ip'
+                    }
+                ],
+                rerun: true
+            }, '*');
+        }
+    });
+    </script>
+    """,
+    height=0,
+)
 
 # Create two columns for the layout
 col1, col2 = st.columns([2, 1])
@@ -395,54 +489,33 @@ with col1:
     # DNS Configuration Form
     st.markdown("<h2 class='section-header'>DNS Configuration</h2>", unsafe_allow_html=True)
     
-    # Display an informational message about external IPs in cloud deployment
-    st.markdown(
-        "<div class='warning-message'>"
-        "⚠️ <strong>Cloud Deployment Notice:</strong> When using the 'External IP' option, "
-        "this app will detect the IP of the Streamlit server, not your personal device. "
-        "For correct operation, use the 'Manual IP' option to enter your actual public IP address."
-        "</div>",
-        unsafe_allow_html=True
-    )
+    # IP Detection and Selection Section
+    st.markdown("<div class='ip-container'>", unsafe_allow_html=True)
+    st.markdown("<h3>Your IP Address</h3>", unsafe_allow_html=True)
+    components.html(ip_detection_html, height=120)
+    st.markdown("</div>", unsafe_allow_html=True)
     
     # IP Source Selection
     st.radio(
         "IP Source", 
-        options=["external", "manual", "custom"],
-        index=0, 
+        options=["user_ip", "manual", "custom"],
+        index=0 if st.session_state.user_ip else 1, 
         key="ip_source",
         format_func=lambda x: {
-            "external": "External IP (Cloud server IP)",
-            "manual": "Manual IP Entry (Your actual public IP)",
+            "user_ip": "Use my detected IP address",
+            "manual": "Enter IP manually",
             "custom": "Custom IP (e.g., internal network IP)"
         }[x]
     )
     
-    # Display the detected external IP if available and show IP source help
-    if st.session_state.ip_source == "external":
-        if st.session_state.external_ip:
-            st.info(f"Detected server IP: {st.session_state.external_ip} (this is NOT your personal device's IP)")
-        else:
-            st.warning("Could not detect server IP. Consider using 'Manual IP Entry' instead.")
-    
     # Manual IP input (shown only when manual IP is selected)
     if st.session_state.ip_source == "manual":
-        # First try to get the user's public IP to help them
-        try:
-            user_ip = requests.get("https://checkip.amazonaws.com", timeout=5).text.strip()
-            st.text_input(
-                "Your Public IP Address", 
-                value=user_ip,
-                help="You can verify this is your public IP by searching 'what is my ip' in Google",
-                key="manual_ip"
-            )
-        except:
-            st.text_input(
-                "Your Public IP Address", 
-                placeholder="Enter your public IP here",
-                help="You can find your public IP by searching 'what is my ip' in Google",
-                key="manual_ip"
-            )
+        st.text_input(
+            "Manual IP Address", 
+            placeholder="Enter your IP address",
+            help="Enter a valid IPv4 address",
+            key="manual_ip"
+        )
     else:
         # Ensure the manual_ip exists in session state
         if "manual_ip" not in st.session_state:
@@ -615,8 +688,8 @@ with col2:
         
         # Display the current IP based on the selected source
         current_ip_display = "Unknown"
-        if st.session_state.ip_source == "external":
-            current_ip_display = st.session_state.external_ip or "Could not detect"
+        if st.session_state.ip_source == "user_ip":
+            current_ip_display = st.session_state.user_ip or "Waiting for detection..."
         elif st.session_state.ip_source == "custom":
             current_ip_display = st.session_state.custom_ip or "Not set"
         else:  # manual
@@ -662,19 +735,16 @@ with col2:
         
         st.markdown("</div>", unsafe_allow_html=True)
 
-# Add a tool to check your public IP
-st.sidebar.title("IP Tools")
-st.sidebar.markdown("### Find Your Public IP")
+# Add helpful information in the sidebar
+st.sidebar.title("Help & Information")
 
-if st.sidebar.button("Check My Public IP"):
-    try:
-        ip = requests.get("https://api.ipify.org").text
-        st.sidebar.success(f"Your public IP is: {ip}")
-        st.sidebar.markdown("Use this IP in the 'Manual IP Entry' option.")
-    except:
-        st.sidebar.error("Could not detect your public IP. Please try again.")
+st.sidebar.markdown("### How This Works")
+st.sidebar.markdown("""
+This app uses JavaScript to directly detect your public IP address from your browser, similar to how ipchicken.com works. This gives you your actual IP address, not the server's.
 
-# Add more helpful information
+When you click "Use This IP", it will automatically be selected for your DNS updates.
+""")
+
 st.sidebar.markdown("---")
 st.sidebar.markdown("### Cloudflare API Information")
 st.sidebar.markdown("""
@@ -682,6 +752,16 @@ st.sidebar.markdown("""
 2. Go to your domain settings
 3. Find your Zone ID at the bottom right
 4. Create an API token with DNS:Edit permissions
+""")
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("### About Proxying")
+st.sidebar.markdown("""
+Cloudflare Proxy can only be used with public IP addresses that Cloudflare can reach. 
+
+It cannot be used with:
+- Private/internal IPs (192.168.x.x, 10.x.x.x, etc.)
+- IPs that Cloudflare cannot route to
 """)
 
 # Footer

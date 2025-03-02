@@ -1,3 +1,4 @@
 streamlit>=1.22.0
 requests>=2.28.0
 ipaddress>=1.0.23
+streamlit-authenticator

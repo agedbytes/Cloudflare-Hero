@@ -430,11 +430,7 @@ with col2:
     # Logs Section
     st.subheader("Logs")
     
-    # Disable copy logs button for now
-    # if st.button("Copy Logs"):
-    #     st.session_state.copy_logs_requested = True
-    
-    # Logs display
+    # Logs display (no copy button)
     logs_placeholder = st.empty()
     
     # Update logs in the text area
@@ -473,5 +469,15 @@ st.sidebar.markdown("""
 1. Log in to your Cloudflare dashboard
 2. Go to your domain settings
 3. Find your Zone ID at the bottom right
-4. Create an API token with DNS:Edit permissions
+4. [Create an API token with DNS:Edit permissions](https://developers.cloudflare.com/fundamentals/api/get-started/create-token/)
+""")
+
+st.sidebar.subheader("Discord Webhook Setup")
+st.sidebar.markdown("""
+To receive Discord notifications when your DNS records are updated:
+
+1. Open your Discord server settings
+2. Go to Integrations > Webhooks
+3. [Follow the Discord webhook setup guide](https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks)
+4. Copy the webhook URL and paste it in this app
 """)

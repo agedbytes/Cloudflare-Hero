@@ -433,17 +433,18 @@ with col2:
     # Logs display (no copy button)
     logs_placeholder = st.empty()
     
-    # Update logs in the text area
+    # Update logs in the text area with a proper label to fix the warning
     log_content = format_logs()
     if not log_content:
         log_content = "No logs yet. Start an update to see activity logs."
     
     # Fixed-height text area for logs
     logs_placeholder.text_area(
-        label="",
+        label="Log Output",  # Added proper label to fix warnings
         value=log_content,
-        height=400,  # Increase height for better visibility
-        disabled=True
+        height=400,
+        disabled=True,
+        label_visibility="collapsed"  # Hide the label visually but keep it for accessibility
     )
 
 # Add helpful information in the sidebar
